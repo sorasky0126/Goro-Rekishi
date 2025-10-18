@@ -23,7 +23,7 @@
 </head>
 <body>
   <h1>年号・語呂合わせ（タップで表示／非表示）</h1>
-  <p class="note">CSVファイル（<code>goro_history.csv</code>）を同じディレクトリに置いてください。初期状態では「年号」「語呂合わせ」がマスクされます。項目をタップ／クリック、またはキーボードでEnter/Spaceを押すと表示が切り替わります。</p>
+  <p class="note">CSVファイル（<code>goro_history.csv</code>）を同じディレクトリに置いてください。初期状態では「年号」「語呂合わせ」がマスクされます。項目をタップ／クリック、またはキーボードでEnter/Spaceを押すと表示が切り替わります。<br>※出典（Source）列は表示しない設定になっています。</p>
   <div class="controls">
     <button id="toggleAll">すべて表示／非表示を切替</button>
   </div>
@@ -45,19 +45,18 @@ function parseCSV(text){
     } else {
       if(ch === '"'){ inQuotes = true; }
       else if(ch === ','){ row.push(cur); cur = ''; }
-      else if(ch === '\r'){ continue; }
-      else if(ch === '\n'){ row.push(cur); cur = ''; rows.push(row); row = []; }
+      else if(ch === '
+'){ continue; }
+      else if(ch === '
+'){ row.push(cur); cur = ''; rows.push(row); row = []; }
       else { cur += ch; }
     }
   }
-  // 最後のフィールド/行を処理
-  if(inQuotes){ /* 未閉じの引用は無視してそのまま */ }
   if(cur !== '' || row.length>0){ row.push(cur); rows.push(row); }
   return rows;
 }
 
 function maskString(s){
-  // 文字数に合わせて黒丸を作る（絵文字・全角も正しく数える）
   return Array.from(s).map(()=>'●').join('');
 }
 
@@ -65,56 +64,51 @@ function createTable(headers, data){
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const tr = document.createElement('tr');
-  headers.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); });
+  // 表示する列は「年号」「出来事」「語呂合わせ」のみ
+  const visibleHeaders = ['年号','出来事','語呂合わせ'];
+  visibleHeaders.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); });
   thead.appendChild(tr);
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
   data.forEach((row, idx)=>{
     const tr = document.createElement('tr');
-    // Year, Event, Goro, Source  の順を期待
-    const [year, event, goro, source] = row;
+    // CSVの列数に依らず、最初の3列を年号、出来事、語呂合わせとして扱う
+    const year = row[0] || '';
+    const event = row[1] || '';
+    const goro = row[2] || '';
 
-    // 年号セル
     const tdYear = document.createElement('td');
     const spanYear = document.createElement('span');
     spanYear.className = 'toggle-mask masked-text';
     spanYear.tabIndex = 0;
     spanYear.setAttribute('role','button');
     spanYear.setAttribute('aria-pressed','false');
-    spanYear.dataset.original = year || '';
-    spanYear.dataset.masked = maskString(year || '');
+    spanYear.dataset.original = year;
+    spanYear.dataset.masked = maskString(year);
     spanYear.dataset.state = 'masked';
     spanYear.textContent = spanYear.dataset.masked;
     tdYear.appendChild(spanYear);
 
-    // 出来事セル（常に表示）
     const tdEvent = document.createElement('td');
     tdEvent.className = 'muted';
-    tdEvent.textContent = event || '';
+    tdEvent.textContent = event;
 
-    // 語呂合わせセル
     const tdGoro = document.createElement('td');
     const spanGoro = document.createElement('span');
     spanGoro.className = 'toggle-mask masked-text';
     spanGoro.tabIndex = 0;
     spanGoro.setAttribute('role','button');
     spanGoro.setAttribute('aria-pressed','false');
-    spanGoro.dataset.original = goro || '';
-    spanGoro.dataset.masked = maskString(goro || '');
+    spanGoro.dataset.original = goro;
+    spanGoro.dataset.masked = maskString(goro);
     spanGoro.dataset.state = 'masked';
     spanGoro.textContent = spanGoro.dataset.masked;
     tdGoro.appendChild(spanGoro);
 
-    // 出典セル
-    const tdSource = document.createElement('td');
-    tdSource.className = 'muted';
-    tdSource.textContent = source || '';
-
     tr.appendChild(tdYear);
     tr.appendChild(tdEvent);
     tr.appendChild(tdGoro);
-    tr.appendChild(tdSource);
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
@@ -162,7 +156,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
       wrap.appendChild(table);
       addToggleBehavior(wrap);
 
-      // Toggle all の動作
       document.getElementById('toggleAll').addEventListener('click', ()=>toggleAll(wrap));
     })
     .catch(err=>{ wrap.innerHTML = '<div style="color:#b91c1c">読み込みエラー: '+(err.message||err)+'</div>'; console.error(err); });
