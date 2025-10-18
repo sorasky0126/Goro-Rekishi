@@ -8,9 +8,8 @@
     body{font-family: system-ui,-apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Segoe UI", Roboto, "Yu Gothic", sans-serif; padding:20px; background:#f7fafc; color:#0f172a}
     h1{font-size:1.25rem; margin-bottom:0.5rem}
     p.note{margin-top:0; margin-bottom:1rem; color:#475569}
-    .controls{margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap}
+    .controls{margin-bottom:12px}
     button{background:#0369a1;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer}
-    input[type=file]{padding:6px}
     table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,0.05)}
     th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e6eef6}
     th{background:#f1f5f9;font-weight:600}
@@ -19,84 +18,114 @@
     .toggle-mask:focus{outline:3px solid rgba(3,105,161,0.15)}
     .masked-text{letter-spacing:0.08em; font-weight:600}
     .muted{color:#64748b;font-size:0.95rem}
-    .error{color:#b91c1c;padding:8px;background:#fff1f2;border-radius:6px}
-    .hint{color:#0f172a;background:#e6f2ff;padding:8px;border-radius:6px}
     @media (max-width:700px){th,td{padding:8px}}
   </style>
 </head>
 <body>
   <h1>年号・語呂合わせ（タップで表示／非表示）</h1>
-  <p class="note">同ディレクトリの <code>goro_history.csv</code> を読み込んで表示します。初期は「年号」「語呂合わせ」がマスクされています。もしブラウザのセキュリティで自動読み込みがブロックされている場合は、下のボタンでファイルを選択してください（ローカルで開いたときに発生する表示問題を回避します）。</p>
-
+  <p class="note">CSVファイル（<code>goro_history.csv</code>）を同じディレクトリに置いてください。ファイル内に「Source」という列があっても自動で無視します。初期状態では「年号」「語呂合わせ」がマスクされます。項目をタップ／クリック、またはキーボードでEnter/Spaceを押すと表示が切り替わります。</p>
   <div class="controls">
     <button id="toggleAll">すべて表示／非表示を切替</button>
-    <label class="hint" id="status">読み込み中…</label>
-    <input type="file" id="fileInput" accept=".csv" />
-    <button id="reloadBtn">再読み込み</button>
   </div>
-
   <div id="tableWrap">読み込み中...</div>
-  <div id="debug" style="margin-top:12px; font-size:0.9rem; color:#334155;"></div>
 
 <script>
-// CSVパーサー（シンプル）
+// 軽量なCSVパーサー (RFC4180寄り、ダブルクオート対応)
 function parseCSV(text){
-  // BOM 削除
-  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-  const lines = text.split(/
-?
-/).filter(l=>l.trim()!=='');
-  const rows = lines.map(line=>{
-    const fields = [];
-    let cur = '';
-    let inQuotes = false;
-    for(let i=0;i<line.length;i++){
-      const ch = line[i];
-      if(inQuotes){
-        if(ch === '"'){
-          if(line[i+1] === '"'){ cur += '"'; i++; }
-          else { inQuotes = false; }
-        } else { cur += ch; }
-      } else {
-        if(ch === '"'){ inQuotes = true; }
-        else if(ch === ','){ fields.push(cur); cur = ''; }
-        else { cur += ch; }
-      }
+  const rows = [];
+  let cur = '';
+  let row = [];
+  let inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch==='"'){
+        if(text[i+1] === '"'){ cur += '"'; i++; } else { inQuotes = false; }
+      } else { cur += ch; }
+    } else {
+      if(ch === '"'){ inQuotes = true; }
+      else if(ch === ','){ row.push(cur); cur = ''; }
+      else if(ch === '\r'){ continue; }
+      else if(ch === '\n'){ row.push(cur); cur = ''; rows.push(row); row = []; }
+      else { cur += ch; }
     }
-    fields.push(cur);
-    return fields;
-  });
+  }
+  // 最後のフィールド/行を処理
+  if(inQuotes){ /* 未閉じの引用はそのまま扱う */ }
+  if(cur !== '' || row.length>0){ row.push(cur); rows.push(row); }
   return rows;
 }
 
-function maskString(s){ return Array.from(s||'').map(()=>'●').join(''); }
+function maskString(s){
+  // 文字数に合わせて黒丸を作る（絵文字・全角も正しく数える）
+  return Array.from(s).map(()=> '●' ).join('');
+}
 
-function createTable(data){
+function createTable(headers, data){
   const table = document.createElement('table');
   const thead = document.createElement('thead');
-  const trh = document.createElement('tr');
-  ['年号','出来事','語呂合わせ'].forEach(t=>{ const th = document.createElement('th'); th.textContent = t; trh.appendChild(th); });
-  thead.appendChild(trh);
+  const trHead = document.createElement('tr');
+
+  headers.forEach(h=>{
+    const th = document.createElement('th');
+    th.textContent = h;
+    trHead.appendChild(th);
+  });
+  thead.appendChild(trHead);
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  data.forEach(row=>{
+  data.forEach((row)=>{
     const tr = document.createElement('tr');
-    const year = row[0]||'';
-    const event = row[1]||'';
-    const goro = row[2]||'';
 
+    // 年号、出来事、語呂合わせ の順を想定して先頭3列を扱う（CSVがそれに準じている前提）
+    // 余分な列は無視（ただしヘッダーが残っていれば列数は一致するはず）
+    const year = row[0] || '';
+    const event = row[1] || '';
+    const goro = row[2] || '';
+
+    // 年号セル（マスク可能）
     const tdYear = document.createElement('td');
-    const spY = document.createElement('span');
-    spY.className='toggle-mask masked-text'; spY.tabIndex=0; spY.dataset.original=year; spY.dataset.masked=maskString(year); spY.dataset.state='masked'; spY.textContent=spY.dataset.masked; tdYear.appendChild(spY);
+    const spanYear = document.createElement('span');
+    spanYear.className = 'toggle-mask masked-text';
+    spanYear.tabIndex = 0;
+    spanYear.setAttribute('role','button');
+    spanYear.setAttribute('aria-pressed','false');
+    spanYear.dataset.original = year;
+    spanYear.dataset.masked = maskString(year);
+    spanYear.dataset.state = 'masked';
+    spanYear.textContent = spanYear.dataset.masked;
+    tdYear.appendChild(spanYear);
+    tr.appendChild(tdYear);
 
-    const tdEvent = document.createElement('td'); tdEvent.className='muted'; tdEvent.textContent=event;
+    // 出来事セル（常に表示）
+    const tdEvent = document.createElement('td');
+    tdEvent.className = 'muted';
+    tdEvent.textContent = event;
+    tr.appendChild(tdEvent);
 
+    // 語呂合わせセル（マスク可能）
     const tdGoro = document.createElement('td');
-    const spG = document.createElement('span');
-    spG.className='toggle-mask masked-text'; spG.tabIndex=0; spG.dataset.original=goro; spG.dataset.masked=maskString(goro); spG.dataset.state='masked'; spG.textContent=spG.dataset.masked; tdGoro.appendChild(spG);
+    const spanGoro = document.createElement('span');
+    spanGoro.className = 'toggle-mask masked-text';
+    spanGoro.tabIndex = 0;
+    spanGoro.setAttribute('role','button');
+    spanGoro.setAttribute('aria-pressed','false');
+    spanGoro.dataset.original = goro;
+    spanGoro.dataset.masked = maskString(goro);
+    spanGoro.dataset.state = 'masked';
+    spanGoro.textContent = spanGoro.dataset.masked;
+    tdGoro.appendChild(spanGoro);
+    tr.appendChild(tdGoro);
 
-    tr.appendChild(tdYear); tr.appendChild(tdEvent); tr.appendChild(tdGoro);
+    // もしヘッダに3列以上あるなら、3列目以降（Sourceは事前に除外済みなので通常はここは不要）
+    for(let i=3;i<headers.length;i++){
+      const tdExtra = document.createElement('td');
+      tdExtra.className = 'muted';
+      tdExtra.textContent = row[i] || '';
+      tr.appendChild(tdExtra);
+    }
+
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
@@ -106,8 +135,15 @@ function createTable(data){
 function addToggleBehavior(container){
   container.querySelectorAll('.toggle-mask').forEach(el=>{
     function toggle(){
-      if(el.dataset.state === 'masked'){ el.textContent = el.dataset.original; el.dataset.state='unmasked'; el.setAttribute('aria-pressed','true'); }
-      else { el.textContent = el.dataset.masked; el.dataset.state='masked'; el.setAttribute('aria-pressed','false'); }
+      if(el.dataset.state === 'masked'){
+        el.textContent = el.dataset.original;
+        el.dataset.state = 'unmasked';
+        el.setAttribute('aria-pressed','true');
+      } else {
+        el.textContent = el.dataset.masked;
+        el.dataset.state = 'masked';
+        el.setAttribute('aria-pressed','false');
+      }
     }
     el.addEventListener('click', toggle);
     el.addEventListener('keydown', function(e){ if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggle(); }});
@@ -115,62 +151,52 @@ function addToggleBehavior(container){
 }
 
 function toggleAll(container){
-  const anyMasked = Array.from(container.querySelectorAll('.toggle-mask')).some(el=>el.dataset.state==='masked');
-  container.querySelectorAll('.toggle-mask').forEach(el=>{ if(anyMasked){ el.textContent=el.dataset.original; el.dataset.state='unmasked'; el.setAttribute('aria-pressed','true'); } else { el.textContent=el.dataset.masked; el.dataset.state='masked'; el.setAttribute('aria-pressed','false'); } });
+  const toggles = Array.from(container.querySelectorAll('.toggle-mask'));
+  const anyMasked = toggles.some(el=>el.dataset.state === 'masked');
+  toggles.forEach(el=>{
+    if(anyMasked){ el.textContent = el.dataset.original; el.dataset.state='unmasked'; el.setAttribute('aria-pressed','true'); }
+    else { el.textContent = el.dataset.masked; el.dataset.state='masked'; el.setAttribute('aria-pressed','false'); }
+  });
 }
 
-async function tryFetchCSV(){
-  const wrap=document.getElementById('tableWrap');
-  const status=document.getElementById('status');
-  status.textContent='goro_history.csv を自動読み込み中…';
-  try{
-    const res = await fetch('goro_history.csv');
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const txt = await res.text();
-    const rows = parseCSV(txt);
-    if(rows.length <= 1){ wrap.innerHTML='<div class="error">CSVの行数が不十分です。ファイルを確認するか、下のファイル選択で読み込んでください。</div>'; document.getElementById('debug').textContent='(自動読み込みは成功しましたが、データが見つかりませんでした)'; return; }
-    const data = rows.slice(1).filter(r=>r.some(c=>c && c.trim()!=='') );
-    const table = createTable(data);
-    wrap.innerHTML=''; wrap.appendChild(table);
-    addToggleBehavior(wrap);
-    document.getElementById('debug').textContent='自動読み込みに成功しました。';
-    status.textContent='自動読み込み成功';
-  }catch(err){
-    wrap.innerHTML='<div class="error">自動読み込みに失敗しました。原因: '+(err.message||err)+'</div>';
-    document.getElementById('debug').textContent='自動読み込みエラー; ローカルでファイル:// を使っている場合はセキュリティ制限により失敗します。下の「ファイルを選択」から CSV を読み込んでください。';
-    status.textContent='自動読み込み失敗';
-    console.warn('fetch error', err);
-  }
+// ヘッダー名が "Source"（大文字小文字問わず）の列を自動で除外
+function removeSourceColumn(rows){
+  if(!rows || rows.length === 0) return rows;
+  const headers = rows[0].map(h => (h === undefined || h === null) ? '' : String(h).trim());
+  const sourceIndex = headers.findIndex(h => h.toLowerCase() === 'source');
+  if(sourceIndex === -1) return rows; // Source列なし
+  // 新しい行配列を作る（sourceIndex を除外）
+  const newRows = rows.map(row => row.filter((_,i) => i !== sourceIndex));
+  return newRows;
 }
 
-// ファイル選択で読み込む
-function handleFile(file){
-  const wrap=document.getElementById('tableWrap');
-  const status=document.getElementById('status');
-  const reader = new FileReader();
-  reader.onload = function(e){
-    try{
-      const txt = e.target.result;
-      const rows = parseCSV(txt);
-      if(rows.length <= 1){ wrap.innerHTML='<div class="error">CSV の行数が不十分です。</div>'; return; }
-      const data = rows.slice(1).filter(r=>r.some(c=>c && c.trim()!=='') );
-      const table = createTable(data);
-      wrap.innerHTML=''; wrap.appendChild(table);
+// メイン：CSVを読み込んでテーブルを生成
+document.addEventListener('DOMContentLoaded', ()=>{
+  const wrap = document.getElementById('tableWrap');
+  fetch('goro_history.csv')
+    .then(r=>{ if(!r.ok) throw new Error('CSVファイルを読み込めませんでした: '+r.status); return r.text(); })
+    .then(txt=>{
+      const rowsRaw = parseCSV(txt);
+      if(!rowsRaw || rowsRaw.length < 1){ wrap.textContent = 'CSV の中身が空です。'; return; }
+
+      // Source列を除外した新しい行配列を生成
+      const rowsFiltered = removeSourceColumn(rowsRaw);
+
+      const headers = rowsFiltered[0].map(h => h || '');
+      // 本文データ：空行を除外
+      const data = rowsFiltered.slice(1).filter(r=>r.some(c=>c && c.trim() !== ''));
+
+      if(data.length === 0){ wrap.textContent = 'CSV にデータが見つかりません。'; return; }
+
+      const table = createTable(headers, data);
+      wrap.innerHTML = '';
+      wrap.appendChild(table);
       addToggleBehavior(wrap);
-      status.textContent = 'ファイル読み込み成功: '+file.name;
-      document.getElementById('debug').textContent = 'ファイル選択で読み込みました。';
-    }catch(err){ wrap.innerHTML='<div class="error">ファイル読み込み中にエラーが発生しました: '+(err.message||err)+'</div>'; console.error(err); }
-  };
-  reader.onerror = function(e){ wrap.innerHTML='<div class="error">ファイルを読み込めませんでした。</div>'; };
-  reader.readAsText(file, 'utf-8');
-}
 
-// 初期処理
-window.addEventListener('DOMContentLoaded', ()=>{
-  tryFetchCSV();
-  document.getElementById('fileInput').addEventListener('change', (e)=>{ const f = e.target.files[0]; if(f) handleFile(f); });
-  document.getElementById('reloadBtn').addEventListener('click', ()=>{ tryFetchCSV(); });
-  document.getElementById('toggleAll').addEventListener('click', ()=>{ toggleAll(document.getElementById('tableWrap')); });
+      // Toggle all の動作
+      document.getElementById('toggleAll').addEventListener('click', ()=>toggleAll(wrap));
+    })
+    .catch(err=>{ wrap.innerHTML = '<div style="color:#b91c1c">読み込みエラー: '+(err.message||err)+'</div>'; console.error(err); });
 });
 </script>
 </body>
