@@ -8,29 +8,41 @@
     body{font-family: system-ui,-apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Segoe UI", Roboto, "Yu Gothic", sans-serif; padding:20px; background:#f7fafc; color:#0f172a}
     h1{font-size:1.25rem; margin-bottom:0.5rem}
     p.note{margin-top:0; margin-bottom:1rem; color:#475569}
-    .controls{margin-bottom:12px}
+    .controls{margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap}
     button{background:#0369a1;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer}
-    table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,0.05)}
-    th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e6eef6}
-    th{background:#f1f5f9;font-weight:600}
+    button.small{background:#0ea5a4;padding:6px 8px;font-size:0.9rem;border-radius:6px}
+    table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,0.05); table-layout: fixed;}
+    colgroup col { /* col幅は JS 側で設定 */
+      /* nothing here; widths set inline */
+    }
+    th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e6eef6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+    th{background:#f1f5f9;font-weight:600; position:relative;}
     tr:last-child td{border-bottom:none}
-    .toggle-mask{cursor:pointer;display:inline-block;padding:6px;border-radius:6px}
+    .toggle-mask{cursor:pointer;display:inline-block;padding:6px;border-radius:6px; min-width:1ch; max-width:100%;}
     .toggle-mask:focus{outline:3px solid rgba(3,105,161,0.15)}
-    .masked-text{letter-spacing:0.08em; font-weight:600}
+    .masked-text{letter-spacing:0.08em; font-weight:600; font-family: "Helvetica Neue", system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP"; }
     .muted{color:#64748b;font-size:0.95rem}
+    .col-toggle { position:absolute; right:8px; top:6px; display:inline-flex; gap:6px; }
+    .col-toggle button{background:#94a3b8;color:#fff;padding:4px 6px;border-radius:6px;font-size:0.82rem}
     @media (max-width:700px){th,td{padding:8px}}
   </style>
 </head>
 <body>
   <h1>年号・語呂合わせ（タップで表示／非表示）</h1>
   <p class="note">CSVファイル（<code>goro_history.csv</code>）を同じディレクトリに置いてください。ファイル内に「Source」という列があっても自動で無視します。初期状態では「年号」「語呂合わせ」がマスクされます。項目をタップ／クリック、またはキーボードでEnter/Spaceを押すと表示が切り替わります。</p>
+
   <div class="controls">
     <button id="toggleAll">すべて表示／非表示を切替</button>
+    <button id="toggleColYear" class="small">年号 一括切替</button>
+    <button id="toggleColGoro" class="small">語呂 一括切替</button>
+    <div style="flex:1"></div>
+    <div style="color:#475569; align-self:center; font-size:0.95rem">※長い文字は列幅を変えずに省略表示されます</div>
   </div>
+
   <div id="tableWrap">読み込み中...</div>
 
 <script>
-// 軽量なCSVパーサー (RFC4180寄り、ダブルクオート対応)
+// 軽量CSVパーサー
 function parseCSV(text){
   const rows = [];
   let cur = '';
@@ -50,25 +62,37 @@ function parseCSV(text){
       else { cur += ch; }
     }
   }
-  // 最後のフィールド/行を処理
-  if(inQuotes){ /* 未閉じの引用はそのまま扱う */ }
+  if(inQuotes){ /* 未閉じの引用はそのまま */ }
   if(cur !== '' || row.length>0){ row.push(cur); rows.push(row); }
   return rows;
 }
 
 function maskString(s){
-  // 文字数に合わせて黒丸を作る（絵文字・全角も正しく数える）
   return Array.from(s).map(()=> '●' ).join('');
 }
 
 function createTable(headers, data){
   const table = document.createElement('table');
+
+  // 列幅（%）のデフォルト。headers.length に合わせて調整する。
+  const colWidths = computeColWidths(headers.length);
+
+  // colgroup を作ることで列幅固定（table-layout: fixed に対応）
+  const colgroup = document.createElement('colgroup');
+  for(let i=0;i<headers.length;i++){
+    const col = document.createElement('col');
+    col.style.width = (colWidths[i] || (100/headers.length)) + '%';
+    colgroup.appendChild(col);
+  }
+  table.appendChild(colgroup);
+
   const thead = document.createElement('thead');
   const trHead = document.createElement('tr');
 
-  headers.forEach(h=>{
+  headers.forEach((h, idx)=>{
     const th = document.createElement('th');
     th.textContent = h;
+    // 列ごとの一括ボタンをヘッダに表示（年号と語呂にのみ、視覚的には col ボタンを上の controls で用意しているためここは空にしておく）
     trHead.appendChild(th);
   });
   thead.appendChild(trHead);
@@ -77,59 +101,65 @@ function createTable(headers, data){
   const tbody = document.createElement('tbody');
   data.forEach((row)=>{
     const tr = document.createElement('tr');
+    // 年号、出来事、語呂合わせ を先頭3列に想定（不足は空文字）
+    for(let i=0;i<headers.length;i++){
+      const td = document.createElement('td');
 
-    // 年号、出来事、語呂合わせ の順を想定して先頭3列を扱う（CSVがそれに準じている前提）
-    // 余分な列は無視（ただしヘッダーが残っていれば列数は一致するはず）
-    const year = row[0] || '';
-    const event = row[1] || '';
-    const goro = row[2] || '';
-
-    // 年号セル（マスク可能）
-    const tdYear = document.createElement('td');
-    const spanYear = document.createElement('span');
-    spanYear.className = 'toggle-mask masked-text';
-    spanYear.tabIndex = 0;
-    spanYear.setAttribute('role','button');
-    spanYear.setAttribute('aria-pressed','false');
-    spanYear.dataset.original = year;
-    spanYear.dataset.masked = maskString(year);
-    spanYear.dataset.state = 'masked';
-    spanYear.textContent = spanYear.dataset.masked;
-    tdYear.appendChild(spanYear);
-    tr.appendChild(tdYear);
-
-    // 出来事セル（常に表示）
-    const tdEvent = document.createElement('td');
-    tdEvent.className = 'muted';
-    tdEvent.textContent = event;
-    tr.appendChild(tdEvent);
-
-    // 語呂合わせセル（マスク可能）
-    const tdGoro = document.createElement('td');
-    const spanGoro = document.createElement('span');
-    spanGoro.className = 'toggle-mask masked-text';
-    spanGoro.tabIndex = 0;
-    spanGoro.setAttribute('role','button');
-    spanGoro.setAttribute('aria-pressed','false');
-    spanGoro.dataset.original = goro;
-    spanGoro.dataset.masked = maskString(goro);
-    spanGoro.dataset.state = 'masked';
-    spanGoro.textContent = spanGoro.dataset.masked;
-    tdGoro.appendChild(spanGoro);
-    tr.appendChild(tdGoro);
-
-    // もしヘッダに3列以上あるなら、3列目以降（Sourceは事前に除外済みなので通常はここは不要）
-    for(let i=3;i<headers.length;i++){
-      const tdExtra = document.createElement('td');
-      tdExtra.className = 'muted';
-      tdExtra.textContent = row[i] || '';
-      tr.appendChild(tdExtra);
+      if(i === 0){ // 年号（マスク）
+        const span = document.createElement('span');
+        span.className = 'toggle-mask masked-text';
+        span.tabIndex = 0;
+        span.setAttribute('role','button');
+        span.setAttribute('aria-pressed','false');
+        const val = row[i] || '';
+        span.dataset.original = val;
+        span.dataset.masked = maskString(val);
+        span.dataset.state = 'masked';
+        span.textContent = span.dataset.masked;
+        td.appendChild(span);
+      } else if(i === 1){ // 出来事（常に表示）
+        td.className = 'muted';
+        td.textContent = row[i] || '';
+      } else if(i === 2){ // 語呂合わせ（マスク）
+        const span = document.createElement('span');
+        span.className = 'toggle-mask masked-text';
+        span.tabIndex = 0;
+        span.setAttribute('role','button');
+        span.setAttribute('aria-pressed','false');
+        const val = row[i] || '';
+        span.dataset.original = val;
+        span.dataset.masked = maskString(val);
+        span.dataset.state = 'masked';
+        span.textContent = span.dataset.masked;
+        td.appendChild(span);
+      } else { // 追加列（残っているものを表示するが幅は固定）
+        td.className = 'muted';
+        td.textContent = row[i] || '';
+      }
+      tr.appendChild(td);
     }
-
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
   return table;
+}
+
+function computeColWidths(n){
+  // 基本想定: 3列 (年号:20% / 出来事:55% / 語呂:25%)
+  // 列数に応じて残りを均等配分
+  if(n <= 3){
+    const base = [20,55,25];
+    return base.slice(0,n);
+  } else {
+    const widths = [20,55,25];
+    // 3列以降は均等に割る（残りの列は小さめ）
+    const extra = n - 3;
+    const extraWidth = Math.max(5, Math.floor( (100 - 20 - 55 - 25) / Math.max(1,extra) )); // 予備: 0 になることは避ける
+    while(widths.length < n) widths.push(extraWidth);
+    // normalize to sum 100 (簡易)
+    const sum = widths.reduce((a,b)=>a+b,0);
+    return widths.map(w => Math.round(w * 100 / sum));
+  }
 }
 
 function addToggleBehavior(container){
@@ -151,11 +181,35 @@ function addToggleBehavior(container){
 }
 
 function toggleAll(container){
+  // 列幅を変えないため、中身だけ切替（列幅は colgroup で固定）
   const toggles = Array.from(container.querySelectorAll('.toggle-mask'));
+  if(toggles.length === 0) return;
   const anyMasked = toggles.some(el=>el.dataset.state === 'masked');
   toggles.forEach(el=>{
     if(anyMasked){ el.textContent = el.dataset.original; el.dataset.state='unmasked'; el.setAttribute('aria-pressed','true'); }
     else { el.textContent = el.dataset.masked; el.dataset.state='masked'; el.setAttribute('aria-pressed','false'); }
+  });
+}
+
+function toggleColumn(container, colIndex){
+  // colIndex は 0 ベースのテーブル列番号
+  const rows = container.querySelectorAll('tbody tr');
+  if(rows.length === 0) return;
+  // decide whether to unmask or mask: if any masked in that column, unmask all; else mask all
+  let anyMasked = false;
+  rows.forEach(tr=>{
+    const td = tr.children[colIndex];
+    if(!td) return;
+    const span = td.querySelector('.toggle-mask');
+    if(span && span.dataset.state === 'masked') anyMasked = true;
+  });
+  rows.forEach(tr=>{
+    const td = tr.children[colIndex];
+    if(!td) return;
+    const span = td.querySelector('.toggle-mask');
+    if(!span) return;
+    if(anyMasked){ span.textContent = span.dataset.original; span.dataset.state='unmasked'; span.setAttribute('aria-pressed','true'); }
+    else { span.textContent = span.dataset.masked; span.dataset.state='masked'; span.setAttribute('aria-pressed','false'); }
   });
 }
 
@@ -165,12 +219,11 @@ function removeSourceColumn(rows){
   const headers = rows[0].map(h => (h === undefined || h === null) ? '' : String(h).trim());
   const sourceIndex = headers.findIndex(h => h.toLowerCase() === 'source');
   if(sourceIndex === -1) return rows; // Source列なし
-  // 新しい行配列を作る（sourceIndex を除外）
   const newRows = rows.map(row => row.filter((_,i) => i !== sourceIndex));
   return newRows;
 }
 
-// メイン：CSVを読み込んでテーブルを生成
+// メイン
 document.addEventListener('DOMContentLoaded', ()=>{
   const wrap = document.getElementById('tableWrap');
   fetch('goro_history.csv')
@@ -179,11 +232,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
       const rowsRaw = parseCSV(txt);
       if(!rowsRaw || rowsRaw.length < 1){ wrap.textContent = 'CSV の中身が空です。'; return; }
 
-      // Source列を除外した新しい行配列を生成
       const rowsFiltered = removeSourceColumn(rowsRaw);
-
       const headers = rowsFiltered[0].map(h => h || '');
-      // 本文データ：空行を除外
       const data = rowsFiltered.slice(1).filter(r=>r.some(c=>c && c.trim() !== ''));
 
       if(data.length === 0){ wrap.textContent = 'CSV にデータが見つかりません。'; return; }
@@ -193,8 +243,18 @@ document.addEventListener('DOMContentLoaded', ()=>{
       wrap.appendChild(table);
       addToggleBehavior(wrap);
 
-      // Toggle all の動作
+      // 全体切替
       document.getElementById('toggleAll').addEventListener('click', ()=>toggleAll(wrap));
+
+      // 列ごと切替ボタン：年号は列0、語呂は列2（CSVの構成により異なる場合は調整が必要）
+      document.getElementById('toggleColYear').addEventListener('click', ()=>toggleColumn(wrap, 0));
+      // 語呂列を探す：headersの3番目（インデックス2）が語呂でない場合は近い列を使うためにインデックスを確認
+      let goroIndex = 2;
+      for(let i=0;i<headers.length;i++){
+        const h = (headers[i] || '').toLowerCase();
+        if(h.includes('語') || h.includes('ごろ') || h.includes('goro') || h.includes('goro') || h.includes('goro')){ goroIndex = i; break; }
+      }
+      document.getElementById('toggleColGoro').addEventListener('click', ()=>toggleColumn(wrap, goroIndex));
     })
     .catch(err=>{ wrap.innerHTML = '<div style="color:#b91c1c">読み込みエラー: '+(err.message||err)+'</div>'; console.error(err); });
 });
