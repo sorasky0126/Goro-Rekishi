@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>年号・語呂合わせ（タップで表示／非表示）</title>
+  <style>
+    body{font-family: system-ui,-apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Segoe UI", Roboto, "Yu Gothic", sans-serif; padding:20px; background:#f7fafc; color:#0f172a}
+    h1{font-size:1.25rem; margin-bottom:0.5rem}
+    p.note{margin-top:0; margin-bottom:1rem; color:#475569}
+    .controls{margin-bottom:12px}
+    button{background:#0369a1;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer}
+    table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,0.05)}
+    th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e6eef6}
+    th{background:#f1f5f9;font-weight:600}
+    tr:last-child td{border-bottom:none}
+    .toggle-mask{cursor:pointer;display:inline-block;padding:6px;border-radius:6px}
+    .toggle-mask:focus{outline:3px solid rgba(3,105,161,0.15)}
+    .masked-text{letter-spacing:0.08em; font-weight:600}
+    .muted{color:#64748b;font-size:0.95rem}
+    @media (max-width:700px){th,td{padding:8px}}
+  </style>
+</head>
+<body>
+  <h1>年号・語呂合わせ（タップで表示／非表示）</h1>
+  <p class="note">CSVファイル（<code>goro_history.csv</code>）を同じディレクトリに置いてください。初期状態では「年号」「語呂合わせ」がマスクされます。項目をタップ／クリック、またはキーボードでEnter/Spaceを押すと表示が切り替わります。</p>
+  <div class="controls">
+    <button id="toggleAll">すべて表示／非表示を切替</button>
+  </div>
+  <div id="tableWrap">読み込み中...</div>
+
+<script>
+// 軽量なCSVパーサー (RFC4180寄り、ダブルクオート対応)
+function parseCSV(text){
+  const rows = [];
+  let cur = '';
+  let row = [];
+  let inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch==='"'){
+        if(text[i+1] === '"'){ cur += '"'; i++; } else { inQuotes = false; }
+      } else { cur += ch; }
+    } else {
+      if(ch === '"'){ inQuotes = true; }
+      else if(ch === ','){ row.push(cur); cur = ''; }
+      else if(ch === '\r'){ continue; }
+      else if(ch === '\n'){ row.push(cur); cur = ''; rows.push(row); row = []; }
+      else { cur += ch; }
+    }
+  }
+  // 最後のフィールド/行を処理
+  if(inQuotes){ /* 未閉じの引用は無視してそのまま */ }
+  if(cur !== '' || row.length>0){ row.push(cur); rows.push(row); }
+  return rows;
+}
+
+function maskString(s){
+  // 文字数に合わせて黒丸を作る（絵文字・全角も正しく数える）
+  return Array.from(s).map(()=>'●').join('');
+}
+
+function createTable(headers, data){
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const tr = document.createElement('tr');
+  headers.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); });
+  thead.appendChild(tr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  data.forEach((row, idx)=>{
+    const tr = document.createElement('tr');
+    // Year, Event, Goro, Source  の順を期待
+    const [year, event, goro, source] = row;
+
+    // 年号セル
+    const tdYear = document.createElement('td');
+    const spanYear = document.createElement('span');
+    spanYear.className = 'toggle-mask masked-text';
+    spanYear.tabIndex = 0;
+    spanYear.setAttribute('role','button');
+    spanYear.setAttribute('aria-pressed','false');
+    spanYear.dataset.original = year || '';
+    spanYear.dataset.masked = maskString(year || '');
+    spanYear.dataset.state = 'masked';
+    spanYear.textContent = spanYear.dataset.masked;
+    tdYear.appendChild(spanYear);
+
+    // 出来事セル（常に表示）
+    const tdEvent = document.createElement('td');
+    tdEvent.className = 'muted';
+    tdEvent.textContent = event || '';
+
+    // 語呂合わせセル
+    const tdGoro = document.createElement('td');
+    const spanGoro = document.createElement('span');
+    spanGoro.className = 'toggle-mask masked-text';
+    spanGoro.tabIndex = 0;
+    spanGoro.setAttribute('role','button');
+    spanGoro.setAttribute('aria-pressed','false');
+    spanGoro.dataset.original = goro || '';
+    spanGoro.dataset.masked = maskString(goro || '');
+    spanGoro.dataset.state = 'masked';
+    spanGoro.textContent = spanGoro.dataset.masked;
+    tdGoro.appendChild(spanGoro);
+
+    // 出典セル
+    const tdSource = document.createElement('td');
+    tdSource.className = 'muted';
+    tdSource.textContent = source || '';
+
+    tr.appendChild(tdYear);
+    tr.appendChild(tdEvent);
+    tr.appendChild(tdGoro);
+    tr.appendChild(tdSource);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+function addToggleBehavior(container){
+  container.querySelectorAll('.toggle-mask').forEach(el=>{
+    function toggle(){
+      if(el.dataset.state === 'masked'){
+        el.textContent = el.dataset.original;
+        el.dataset.state = 'unmasked';
+        el.setAttribute('aria-pressed','true');
+      } else {
+        el.textContent = el.dataset.masked;
+        el.dataset.state = 'masked';
+        el.setAttribute('aria-pressed','false');
+      }
+    }
+    el.addEventListener('click', toggle);
+    el.addEventListener('keydown', function(e){ if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggle(); }});
+  });
+}
+
+function toggleAll(container){
+  const anyMasked = Array.from(container.querySelectorAll('.toggle-mask')).some(el=>el.dataset.state === 'masked');
+  container.querySelectorAll('.toggle-mask').forEach(el=>{
+    if(anyMasked){ el.textContent = el.dataset.original; el.dataset.state='unmasked'; el.setAttribute('aria-pressed','true'); }
+    else { el.textContent = el.dataset.masked; el.dataset.state='masked'; el.setAttribute('aria-pressed','false'); }
+  });
+}
+
+// メイン：CSVを読み込んでテーブルを生成
+document.addEventListener('DOMContentLoaded', ()=>{
+  const wrap = document.getElementById('tableWrap');
+  fetch('goro_history.csv')
+    .then(r=>{ if(!r.ok) throw new Error('CSVファイルを読み込めませんでした: '+r.status); return r.text(); })
+    .then(txt=>{
+      const rows = parseCSV(txt);
+      if(rows.length < 1){ wrap.textContent = 'CSV の中身が空です。'; return; }
+      const headers = rows[0];
+      const data = rows.slice(1).filter(r=>r.some(c=>c && c.trim()!==''));
+      const table = createTable(headers, data);
+      wrap.innerHTML = '';
+      wrap.appendChild(table);
+      addToggleBehavior(wrap);
+
+      // Toggle all の動作
+      document.getElementById('toggleAll').addEventListener('click', ()=>toggleAll(wrap));
+    })
+    .catch(err=>{ wrap.innerHTML = '<div style="color:#b91c1c">読み込みエラー: '+(err.message||err)+'</div>'; console.error(err); });
+});
+</script>
+</body>
+</html>
